@@ -55,6 +55,7 @@ class SpecAgent(BaseAgent):
         """Write technical specifications based on research and PM direction."""
         # Transition task: ASSIGNED → IN_PROGRESS
         await self._transition_task(message.task_id, TaskState.IN_PROGRESS)
+        self._set_activity("Writing technical specification")
 
         prompt = f"""You have been assigned a specification task. Use the following context to write a detailed technical specification.
 
@@ -110,6 +111,7 @@ Do NOT write the actual implementation code — only the specification."""
 
     async def _handle_feedback(self, message: AgentMessage) -> AgentMessage | None:
         """Revise specifications based on feedback."""
+        self._set_activity("Revising specification based on feedback")
         prompt = f"""Your specification received feedback that needs to be addressed:
 
 FEEDBACK:
@@ -130,6 +132,7 @@ Please revise the specification to address all feedback points. Output the compl
 
     async def _handle_question(self, message: AgentMessage) -> AgentMessage | None:
         """Answer questions about the specification."""
+        self._set_activity(f"Answering question from {message.sender.value}")
         prompt = f"""The {message.sender.value} agent has a question about the specification:
 
 {message.payload.content}

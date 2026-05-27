@@ -325,6 +325,19 @@ main {
     margin-top: 0.15rem;
 }
 
+.agent-activity {
+    font-size: 0.7rem;
+    color: var(--accent);
+    font-style: italic;
+    margin-top: 0.15rem;
+    animation: pulse-text 2s ease-in-out infinite;
+}
+
+@keyframes pulse-text {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+}
+
 .agent-status {
     font-size: 0.7rem;
     padding: 0.15rem 0.5rem;

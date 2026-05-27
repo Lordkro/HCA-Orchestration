@@ -124,8 +124,10 @@ Important rules:
 
 Think step by step about what needs to be built and in what order."""
 
+        self._set_activity("Decomposing project idea into tasks")
         response = await self.think(prompt, project_id=project_id)
 
+        self._set_activity("Parsing tasks from LLM response")
         # Parse the LLM output into Task records
         tasks = self._parse_tasks(response, project_id)
 
@@ -281,6 +283,7 @@ Think step by step about what needs to be built and in what order."""
 
         # --- Critic approved → close the task and start the next one ---
         if message.sender == AgentRole.CRITIC and review_result == "approved":
+            self._set_activity("Approving task and assigning next")
             logger.info(
                 "pm_deliverable_approved",
                 project_id=message.project_id,
@@ -295,10 +298,12 @@ Think step by step about what needs to be built and in what order."""
 
         # --- Critic rejected → revision cycle ---
         if message.sender == AgentRole.CRITIC and review_result == "needs_revision":
+            self._set_activity("Routing revision feedback")
             return await self._handle_feedback(message)
 
         # --- Standard pipeline progression (non-critic deliverables) ---
         # The agent just submitted work → transition to REVIEW
+        self._set_activity(f"Routing {message.sender.value} deliverable to next agent")
         await self._transition_task(task_id, TaskState.REVIEW)
 
         next_agent = self._determine_next_agent(message.sender)
@@ -349,6 +354,7 @@ who will work on this next.  Be concise."""
 
         # Determine who should address the feedback
         revision_target = self._feedback_target(artifact_type, message.sender)
+        self._set_activity(f"Routing feedback to {revision_target.value}")
 
         prompt = f"""The Critic agent has provided feedback:
 
@@ -379,6 +385,7 @@ who will make the revisions. Be specific about what needs to change."""
 
     async def _handle_question(self, message: AgentMessage) -> AgentMessage | None:
         """Answer questions from other agents."""
+        self._set_activity(f"Answering question from {message.sender.value}")
         prompt = f"""The {message.sender.value} agent has a question:
 
 {message.payload.content}

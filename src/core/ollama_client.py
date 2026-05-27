@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 from dataclasses import dataclass, field
 from typing import AsyncIterator
@@ -285,6 +286,110 @@ class OllamaClient:
         return result
 
     # --------------------------------------------------------
+    # Streaming Collector (used by chat & generate internally)
+    # --------------------------------------------------------
+
+    async def _stream_collect(
+        self,
+        path: str,
+        payload: dict,
+        *,
+        content_key: str = "response",
+    ) -> tuple[str, dict]:
+        """Stream a request and collect all tokens into a single string.
+
+        Uses streaming so the httpx timeout applies per-chunk rather than
+        to the total generation time.  This is critical for thinking models
+        like qwen3 that produce long internal chains before any output.
+
+        Args:
+            path: API path (e.g. "/api/chat" or "/api/generate").
+            payload: JSON payload (must have "stream": True).
+            content_key: Dot-separated key path to extract text from each chunk.
+                         "response" for /api/generate, "message.content" for /api/chat.
+
+        Returns:
+            (collected_text, final_chunk_data) — the final chunk usually
+            carries eval_count / prompt_eval_count stats.
+        """
+        last_error: Exception | None = None
+        keys = content_key.split(".")
+
+        for attempt in range(self.max_retries + 1):
+            try:
+                chunks: list[str] = []
+                final_data: dict = {}
+                logger.info(
+                    "stream_collect_request",
+                    path=path,
+                    model=payload.get("model"),
+                    attempt=attempt + 1,
+                )
+                async with self._client.stream("POST", path, json=payload) as response:
+                    if response.status_code == 404:
+                        model = payload.get("model", "unknown")
+                        raise OllamaModelError(
+                            f"Model '{model}' not found. Pull it first with: "
+                            f"ollama pull {model}"
+                        )
+                    response.raise_for_status()
+                    async for line in response.aiter_lines():
+                        if not line:
+                            continue
+                        try:
+                            data = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        # Navigate the key path to extract text
+                        value = data
+                        for k in keys:
+                            if isinstance(value, dict):
+                                value = value.get(k, "")
+                            else:
+                                value = ""
+                                break
+                        if value:
+                            chunks.append(str(value))
+                        # The last chunk (done=true) carries stats
+                        if data.get("done"):
+                            final_data = data
+                return "".join(chunks), final_data
+
+            except httpx.ConnectError as e:
+                last_error = OllamaConnectionError(
+                    f"Cannot connect to Ollama at {self.base_url}. "
+                    f"Is the Ollama server running? Error: {e}"
+                )
+            except httpx.TimeoutException as e:
+                last_error = OllamaTimeoutError(
+                    f"Stream timed out (attempt {attempt + 1}). Error: {e}"
+                )
+            except OllamaModelError:
+                raise
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code >= 500:
+                    last_error = OllamaError(f"Ollama server error: {e}")
+                else:
+                    raise OllamaError(f"Ollama request failed: {e}") from e
+            except httpx.HTTPError as e:
+                last_error = OllamaError(f"HTTP error: {e}")
+
+            if attempt < self.max_retries:
+                delay = self.retry_base_delay * (2 ** attempt)
+                self.stats.total_retries += 1
+                logger.warning(
+                    "ollama_stream_retry",
+                    attempt=attempt + 1,
+                    max_retries=self.max_retries,
+                    delay_seconds=delay,
+                    error=str(last_error),
+                )
+                await asyncio.sleep(delay)
+
+        self.stats.total_failures += 1
+        raise last_error or OllamaError("Stream request failed after all retries")
+
+    # --------------------------------------------------------
     # Core API Methods
     # --------------------------------------------------------
 
@@ -297,16 +402,22 @@ class OllamaClient:
         temperature: float = 0.7,
         max_tokens: int = 4096,
     ) -> str:
-        """Generate a completion from Ollama (non-streaming)."""
+        """Generate a completion from Ollama using streaming internally.
+
+        Uses streaming to avoid total-time timeouts with thinking models
+        like qwen3, while still returning the complete text.
+        """
         model = model or self.default_model
         payload: dict = {
             "model": model,
             "prompt": prompt,
-            "stream": False,
+            "stream": True,
+            "think": False,
             "options": {
                 "temperature": temperature,
                 "num_predict": max_tokens,
                 "num_ctx": self.num_ctx,
+                "num_gpu": 20,
             },
         }
         if system:
@@ -324,15 +435,17 @@ class OllamaClient:
         )
 
         start = time.monotonic()
-        response = await self._request_with_retry("POST", "/api/generate", json_data=payload)
+        text, final_data = await self._stream_collect(
+            "/api/generate", payload, content_key="response"
+        )
         elapsed = time.monotonic() - start
-        data = response.json()
 
-        text = data.get("response", "")
+        # Strip qwen3 <think>...</think> blocks from output
+        text = re.sub(r"<think>[\s\S]*?</think>\s*", "", text).strip()
 
         # Extract real token counts if available, else estimate
-        eval_count = data.get("eval_count", estimate_tokens(text))
-        prompt_eval_count = data.get("prompt_eval_count", prompt_tokens)
+        eval_count = final_data.get("eval_count", estimate_tokens(text))
+        prompt_eval_count = final_data.get("prompt_eval_count", prompt_tokens)
 
         stats = GenerationStats(
             model=model,
@@ -390,31 +503,35 @@ class OllamaClient:
         payload = {
             "model": model,
             "messages": messages,
-            "stream": False,
+            "stream": True,
+            "think": False,
             "options": {
                 "temperature": temperature,
                 "num_predict": max_tokens,
                 "num_ctx": self.num_ctx,
+                "num_gpu": 20,
             },
         }
 
         input_tokens_est = estimate_messages_tokens(messages)
-        logger.debug(
-            "ollama_chat",
+        logger.info(
+            "ollama_chat_start",
             model=model,
             message_count=len(messages),
             estimated_input_tokens=input_tokens_est,
         )
 
         start = time.monotonic()
-        response = await self._request_with_retry("POST", "/api/chat", json_data=payload)
+        text, final_data = await self._stream_collect(
+            "/api/chat", payload, content_key="message.content"
+        )
         elapsed = time.monotonic() - start
-        data = response.json()
 
-        text = data.get("message", {}).get("content", "")
+        # Strip qwen3 <think>...</think> blocks from output
+        text = re.sub(r"<think>[\s\S]*?</think>\s*", "", text).strip()
 
-        eval_count = data.get("eval_count", estimate_tokens(text))
-        prompt_eval_count = data.get("prompt_eval_count", input_tokens_est)
+        eval_count = final_data.get("eval_count", estimate_tokens(text))
+        prompt_eval_count = final_data.get("prompt_eval_count", input_tokens_est)
 
         stats = GenerationStats(
             model=model,
@@ -575,25 +692,25 @@ class OllamaClient:
     async def preload_model(self, model: str | None = None) -> bool:
         """Preload a model into memory for faster first inference.
 
-        Sends a minimal request to force Ollama to load the model weights.
+        Sends a minimal keep_alive request to force Ollama to load the model
+        weights without generating any tokens.  Uses a short timeout and no
+        retries so it doesn't block actual agent requests.
         """
         model = model or self.default_model
         logger.info("preloading_model", model=model)
         try:
-            await self._request_with_retry(
-                "POST",
+            await self._client.post(
                 "/api/generate",
-                json_data={
+                json={
                     "model": model,
-                    "prompt": "",
-                    "stream": False,
-                    "options": {"num_predict": 1},
+                    "keep_alive": "5m",
                 },
+                timeout=30.0,
             )
             logger.info("model_preloaded", model=model)
             return True
-        except OllamaError as e:
-            logger.error("model_preload_failed", model=model, error=str(e))
+        except Exception as e:
+            logger.warning("model_preload_skipped", model=model, error=str(e))
             return False
 
     # --------------------------------------------------------

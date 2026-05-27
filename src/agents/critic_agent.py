@@ -55,6 +55,7 @@ class CriticAgent(BaseAgent):
         # back to the correct agent if revision is needed.
         original_artifact_type = message.payload.metadata.get("artifact_type", "unknown")
         artifact_type = original_artifact_type
+        self._set_activity(f"Reviewing {artifact_type} from {message.sender.value}")
 
         prompt = f"""You are reviewing a deliverable from the {message.sender.value} agent.
 
@@ -140,6 +141,7 @@ Be constructive but thorough. Do not approve work that has critical or major iss
 
     async def _handle_question(self, message: AgentMessage) -> AgentMessage | None:
         """Answer questions about review feedback."""
+        self._set_activity(f"Clarifying review for {message.sender.value}")
         prompt = f"""The {message.sender.value} agent has a question about your review:
 
 {message.payload.content}

@@ -297,27 +297,29 @@
 ### Phase 5: Docker & Deployment
 > Containerize everything for easy setup and reproducibility.
 
-- [ ] **5.1 — Docker Compose finalization**
-  - One container per agent (scalable)
-  - Redis container
-  - Ollama container (with GPU passthrough if available)
-  - Web UI container
-  - Shared volume for workspace files
+- [x] **5.1 — Docker Compose finalization** ✅
+  - Single orchestrator container (agents + API + pipeline in one process)
+  - Redis container with persistence (AOF)
+  - Ollama container with ROCm GPU passthrough (AMD)
+  - Shared volumes for workspace and data
+  - Model puller one-shot service (`--profile setup`)
+  - Numeric GID-based `group_add` for GPU access compatibility
 
-- [ ] **5.2 — Configuration management**
+- [x] **5.2 — Configuration management** ✅
   - Environment-based config (`.env` file)
-  - Per-agent model selection
-  - Resource limits (memory, CPU per container)
+  - Per-agent model selection (default: `qwen3:14b`, coder: `qwen2.5-coder:14b`)
+  - VRAM-aware settings (`OLLAMA_MAX_LOADED_MODELS=1` for 16GB GPUs)
 
-- [ ] **5.3 — Startup orchestration**
-  - Health checks for all services
-  - Dependency ordering (Redis → Agents → UI)
-  - Graceful shutdown handling
+- [x] **5.3 — Startup orchestration** ✅
+  - Health checks for Ollama (`ollama list`) and Redis (`redis-cli ping`)
+  - Dependency ordering (Ollama + Redis healthy → Orchestrator starts)
+  - Non-blocking model preload (background task, doesn't delay web server)
+  - Graceful shutdown handling (signal handlers, in-flight message draining)
 
-- [ ] **5.4 — Developer experience**
+- [x] **5.4 — Developer experience** ✅
   - `docker compose up` one-command startup
-  - Hot-reload for development
-  - Log aggregation across containers
+  - Hot-reload via `./src` volume mount
+  - Structured JSON logging
   - README with setup instructions
 
 **Deliverable:** `docker compose up` starts the entire system, ready to accept project ideas.
@@ -365,10 +367,9 @@
 ```
 HCA-Orchestration/
 ├── docker-compose.yml          # All services defined here
-├── Dockerfile                  # Base image for agents
-├── Dockerfile.ui               # Image for the web dashboard
+├── Dockerfile                  # Python app image
 ├── pyproject.toml              # Python project config
-├── .env.example                # Environment variable template
+├── .env                        # Environment configuration
 ├── README.md                   # Project documentation
 ├── plan.md                     # This file
 │

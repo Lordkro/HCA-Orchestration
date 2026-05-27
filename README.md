@@ -32,10 +32,20 @@ cp .env.example .env
 ### 2. Pull LLM models (first time only)
 
 ```bash
+# Recommended: pull directly inside the Ollama container
+docker compose up ollama -d
+docker compose exec ollama ollama pull qwen3:14b
+docker compose exec ollama ollama pull qwen2.5-coder:14b
+```
+
+Each model is ~9GB. Alternatively, use the model-puller service:
+```bash
 docker compose --profile setup run --rm model-puller
 ```
 
-This pulls `qwen3.5:27b` and `qwen3-coder:30b` (~17-19GB each). Be patient!
+> **GPU VRAM note:** The default 14B models each need ~10GB VRAM. With 16GB GPUs,
+> only one model can be loaded at a time (`OLLAMA_MAX_LOADED_MODELS=1`).
+> Ollama will automatically swap models as needed.
 
 ### 3. Start the system
 
@@ -117,8 +127,8 @@ All settings are in `.env`. Key options:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `OLLAMA_DEFAULT_MODEL` | `qwen3.5:27b` | Model for all agents |
-| `OLLAMA_CODER_MODEL` | `qwen3-coder:30b` | Model for the Coder agent |
+| `OLLAMA_DEFAULT_MODEL` | `qwen3:14b` | Model for PM, Research, Spec, Critic agents |
+| `OLLAMA_CODER_MODEL` | `qwen2.5-coder:14b` | Model for the Coder agent |
 | `MAX_ITERATIONS_PER_TASK` | `5` | Max revision cycles |
 | `TASK_TIMEOUT_MINUTES` | `30` | Timeout per task |
 | `WEB_PORT` | `8080` | Dashboard port |

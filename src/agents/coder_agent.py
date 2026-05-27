@@ -23,6 +23,10 @@ from src.core.ollama_client import OllamaClient
 logger = structlog.get_logger()
 
 
+class WorkspaceWriteError(ValueError):
+    """Raised when an artifact path cannot be written safely."""
+
+
 class CoderAgent(BaseAgent):
     """The Coder agent.
 
@@ -60,6 +64,7 @@ class CoderAgent(BaseAgent):
         """Generate code based on the specification."""
         # Transition task: ASSIGNED → IN_PROGRESS
         await self._transition_task(message.task_id, TaskState.IN_PROGRESS)
+        self._set_activity("Writing implementation code")
 
         prompt = f"""You have been assigned a coding task. Implement the following based on the specification provided.
 
@@ -117,6 +122,7 @@ Create ALL necessary files for a working implementation. Include:
 
     async def _handle_feedback(self, message: AgentMessage) -> AgentMessage | None:
         """Fix code based on Critic feedback."""
+        self._set_activity("Fixing code based on review feedback")
         prompt = f"""Your code received feedback from the Critic. Please fix the issues.
 
 FEEDBACK:
@@ -150,6 +156,7 @@ Only output files that have changed."""
 
     async def _handle_question(self, message: AgentMessage) -> AgentMessage | None:
         """Answer questions about the implementation."""
+        self._set_activity(f"Answering question from {message.sender.value}")
         prompt = f"""The {message.sender.value} agent has a question about the code:
 
 {message.payload.content}
@@ -275,8 +282,30 @@ Provide a clear answer with code examples if needed."""
 
     async def _write_to_workspace(self, artifact: Artifact, project_id: str) -> None:
         """Write an artifact to the workspace filesystem."""
-        workspace = Path(settings.workspace_dir) / project_id
-        file_path = workspace / artifact.filename
+        workspace_root = Path(settings.workspace_dir)
+        try:
+            workspace_root.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            fallback_root = Path.cwd() / "workspace"
+            logger.warning(
+                "workspace_root_unavailable",
+                configured_path=str(workspace_root),
+                fallback_path=str(fallback_root),
+                error=str(exc),
+            )
+            workspace_root = fallback_root
+            workspace_root.mkdir(parents=True, exist_ok=True)
+
+        workspace = (workspace_root / project_id).resolve()
+        file_path = (workspace / artifact.filename).resolve()
+
+        try:
+            file_path.relative_to(workspace)
+        except ValueError as exc:
+            raise WorkspaceWriteError(
+                f"Artifact path escapes project workspace: {artifact.filename}"
+            ) from exc
+
         file_path.parent.mkdir(parents=True, exist_ok=True)
         file_path.write_text(artifact.content, encoding="utf-8")
         logger.info("file_written", path=str(file_path))
