@@ -51,12 +51,11 @@ async def main() -> None:
         retry_base_delay=settings.ollama_retry_base_delay,
     )
 
-    # Validate Ollama connection and preload default model
+    # Validate Ollama connection (model loads lazily on first request)
     if not await ollama.health_check():
         logger.error("Ollama is not reachable", url=settings.ollama_base_url)
         return
-    logger.info("Ollama connected, preloading default model...")
-    await ollama.preload_model()
+    logger.info("Ollama connected, models will load on first use")
 
     # Initialize orchestration
     task_manager = TaskManager(db=db, bus=bus)

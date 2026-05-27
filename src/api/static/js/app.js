@@ -255,11 +255,17 @@ function renderAgents(agents) {
 
     container.innerHTML = agents.map(agent => {
         const stats = agent.stats || {};
+        const activity = agent.current_activity || '';
+        const duration = agent.activity_duration_seconds || 0;
+        const activityLine = activity
+            ? `<span class="agent-activity">${escapeHtml(activity)} (${formatSeconds(duration)})</span>`
+            : '';
         return `
         <div class="agent-card" data-status="${agent.status}">
             <div class="agent-info">
                 <span class="agent-name">${ROLE_ICONS[agent.role] || '🤖'} ${agent.role}</span>
                 <span class="agent-model">${agent.model}</span>
+                ${activityLine}
                 <span class="agent-stats-line">msgs: ${stats.messages_received || 0} | llm: ${stats.llm_calls || 0} | ${formatSeconds(stats.total_think_seconds)}</span>
             </div>
             <span class="agent-status status-${agent.status}">${agent.status}</span>
@@ -638,7 +644,7 @@ document.addEventListener('DOMContentLoaded', () => {
     loadHealth();
 
     // Periodic refresh
-    setInterval(loadAgents, 10_000);
+    setInterval(loadAgents, 3_000);
     setInterval(loadProjects, 30_000);
     setInterval(loadHealth, 15_000);
 

@@ -55,6 +55,7 @@ class ResearchAgent(BaseAgent):
         """Conduct research based on the assigned task."""
         # Transition task: ASSIGNED → IN_PROGRESS
         await self._transition_task(message.task_id, TaskState.IN_PROGRESS)
+        self._set_activity("Researching technologies and patterns")
 
         prompt = f"""You have been assigned a research task by the Project Manager.
 
@@ -87,6 +88,7 @@ Format your output clearly with sections and bullet points."""
 
     async def _handle_question(self, message: AgentMessage) -> AgentMessage | None:
         """Answer a specific research question."""
+        self._set_activity(f"Answering question from {message.sender.value}")
         prompt = f"""Another agent has a research question:
 
 FROM: {message.sender.value}
@@ -106,6 +108,7 @@ Provide a thorough, well-reasoned answer with specific recommendations."""
 
     async def _handle_feedback(self, message: AgentMessage) -> AgentMessage | None:
         """Revise research based on feedback."""
+        self._set_activity("Revising research based on feedback")
         prompt = f"""Your previous research report received feedback:
 
 FEEDBACK:

@@ -132,6 +132,10 @@ class BaseAgent(ABC):
         self._running = False
         self._processing = False  # True while handling a message (for drain)
 
+        # Activity tracking for UI feedback
+        self._current_activity: str = ""
+        self._activity_since: float = 0.0
+
         # Per-project conversation histories
         self._project_histories: dict[str, list[ConversationEntry]] = {}
 
@@ -300,10 +304,21 @@ class BaseAgent(ABC):
             reason=f"Agent {self.role.value} failed after {1 + self.MAX_PROCESSING_RETRIES} attempts: {last_error}",
         )
 
+    def _set_activity(self, activity: str) -> None:
+        """Update the current activity description for UI feedback."""
+        self._current_activity = activity
+        self._activity_since = time.monotonic()
+
+    def _clear_activity(self) -> None:
+        """Clear the current activity."""
+        self._current_activity = ""
+        self._activity_since = 0.0
+
     async def _handle_message(self, message: AgentMessage) -> None:
         """Route an incoming message to the agent-specific handler."""
         self._processing = True
         self.status = AgentStatus.THINKING
+        self._set_activity(f"Processing {message.type.value} from {message.sender.value}")
         logger.info(
             "message_received",
             agent=self.role.value,
@@ -345,6 +360,7 @@ class BaseAgent(ABC):
         finally:
             self._processing = False
             self.status = AgentStatus.IDLE
+            self._clear_activity()
 
     @abstractmethod
     async def process_message(self, message: AgentMessage) -> AgentMessage | None:
@@ -416,6 +432,7 @@ class BaseAgent(ABC):
         """
         pid = project_id or "_global"
         self.status = AgentStatus.WORKING
+        self._set_activity(f"Waiting for LLM response ({self._model})")
 
         # Build messages list
         messages: list[dict[str, str]] = [
@@ -553,10 +570,15 @@ class BaseAgent(ABC):
 
     def get_info(self) -> dict[str, Any]:
         """Return a snapshot of agent state for the monitoring API."""
+        activity_duration = 0.0
+        if self._activity_since > 0:
+            activity_duration = time.monotonic() - self._activity_since
         return {
             "role": self.role.value,
             "status": self.status.value,
             "model": self._model,
+            "current_activity": self._current_activity,
+            "activity_duration_seconds": round(activity_duration, 1),
             "active_projects": list(self._project_histories.keys()),
             "history_sizes": {
                 pid: len(h) for pid, h in self._project_histories.items()
